@@ -1,0 +1,10 @@
+label:
+  pad: 1.0
+  digit_thr: 0.3
+  min_confidence_ratio: 1.4
+
+segmentation:
+  contour_blur_kernel: 9
+  contour_eps: 0.005
+  outline_eps: 0.0005
+  outline_dilation: 21
