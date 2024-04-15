@@ -1,0 +1,3 @@
+[submodule "localization_server/vendor/Hierarchical-Localization"]
+	path = localization_server/vendor/Hierarchical-Localization
+	url = https://github.com/CompilerLuke/Hierarchical-Localization
