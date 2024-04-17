@@ -4,6 +4,8 @@ import json
 import rustworkx
 from typing import List, Dict, Tuple
 from enum import Enum
+import pyodbc
+import copy
 
 
 class NodeType(Enum):
@@ -16,21 +18,23 @@ class NodeData:
     type: NodeType
     label: str
     pos: np.ndarray
+    locationID: int
 
     def to_json(data):
         return {
             "type": data.type.name,
             "label": data.label,
-            "pos": list(data.pos)
+            "pos": list(data.pos),
+            "locationID": data.locationID,
         }
 
     @staticmethod
     def from_json(data):
-        print(data["pos"])
         return NodeData(
                 type= NodeType[data["type"]] if "type" in data else NodeType.ROOM,
                 label=data["label"],
-                pos=np.array(data["pos"])
+                pos=np.array(data["pos"]),
+                locationID=int(data["locationID"])
             )
 
 @dataclass
@@ -79,14 +83,18 @@ class Floor:
     max: np.ndarray # (3,)
     rooms: List[Room]
     outline: np.ndarray # (n,2)
+    label: str
+    num: int
 
     def to_json(self):
         return {
             "z": self.z,
             "min": list(self.min),
             "max": list(self.max),
-            "rooms": [room.label for room in self.rooms],
-            "outline": [x.tolist() for x in self.outline]
+            "rooms": [id for id,_ in self.rooms.items()],
+            "outline": [x.tolist() for x in self.outline],
+            "label": self.label,
+            "num": self.num,
         }
 
     @staticmethod
@@ -96,23 +104,29 @@ class Floor:
             min= json["min"],
             max= json["max"],
             rooms= [rooms[room] for room in json["rooms"]],
-            outline= np.array(json["outline"])
+            outline= np.array(json["outline"]),
+            label=json["label"],
+            num=json["num"]
         )
 
 
 class BuildingModel:
-    rooms: Dict[str, Room]
+    id: int
+    name: str
+    rooms: Dict[int, Room]
     floors: List[Floor]
     graph: rustworkx.PyGraph
 
-    def __init__(self, rooms: Dict[str,Room], floors: List[Floor], graph: rustworkx.PyGraph):
+    def __init__(self, id: int, name: str, rooms: Dict[int,Room], floors: List[Floor], graph: rustworkx.PyGraph):
+        self.id = id
+        self.name = name
         self.rooms = rooms
         self.floors = floors
         self.graph = graph
 
     @staticmethod
-    def graph_to_json(graph):
-        nodes = {id: data.to_json() for id, data in zip(graph.node_indexes(), graph.nodes())}
+    def graph_to_json(graph: rustworkx.PyGraph):
+        nodes = {id: data.to_json() for id, data in zip(graph.node_indices(), graph.nodes())}
 
         edges = {}
         for edge, data in enumerate(graph.edges()):
@@ -123,7 +137,6 @@ class BuildingModel:
                 "data": data.to_json(),
             }
 
-        print(list(graph.edge_indices()))
         return {"nodes": nodes, "edges": edges}
 
     @staticmethod
@@ -150,6 +163,8 @@ class BuildingModel:
         graph = BuildingModel.graph_to_json(self.graph)
 
         return {
+            "id": self.id,
+            "name": self.name,
             "rooms": rooms,
             "floors": floors,
             "graph": graph
@@ -157,12 +172,135 @@ class BuildingModel:
 
     @staticmethod
     def from_json(json):
-        rooms = {name: Room.from_json(room) for name, room in json["rooms"].items()}
+        rooms = {int(id): Room.from_json(room) for id, room in json["rooms"].items()}
         floors = [Floor.from_json(rooms, floor) for floor in json["floors"]]
         graph = BuildingModel.graph_from_json(json["graph"])
 
         return BuildingModel(
+            id=json["id"],
+            name=json["name"],
             rooms=rooms,
             floors=floors,
             graph=graph
         )
+    
+def db_create_floor(cursor: pyodbc.Cursor, building_id: int, floors: List[Floor]):
+    query = """
+    INSERT INTO BuildingModel.Floors (label,floorNumber)
+    VALUES (?, ?)
+    """
+
+    values = []
+    for floor in floors:
+        values.append((floor.label, floor.num))
+
+    cursor.executemany(query, values)
+
+def db_contour_to_polygon(contour):
+    vals = [ "{} {}".format(x,y) for x,y in np.concatenate([contour,[contour[0]]])]
+    contour_str = "POLYGON((" + ",".join(vals) + "))"
+    return contour_str 
+
+# todo: add floor
+def db_create_rooms(cursor: pyodbc.Cursor, building_id: int, rooms: Dict[str, Room]):
+    query1 = """
+    INSERT INTO BuildingModel.Location (locationType, label, building, contour)
+    OUTPUT inserted.id
+    VALUES (?, ?, ?,  geometry::STPolyFromText(?,0));"""
+        
+    query2 = """
+    INSERT INTO BuildingModel.Rooms (locationID, roomType, description)
+    VALUES (?, ?, ?)
+    """
+
+    values1 = []
+    for _, room in rooms.items():
+        values1.append((NodeType.ROOM.value, room.label, building_id, db_contour_to_polygon(room.contour))) 
+        
+    cursor.executemany(query1, values1)
+    ids = [row[0] for row in cursor.fetchall()]
+    
+    values2 = []
+    for id,room in zip(ids, rooms.values()):
+        values2.append((id, room.type, room.desc))
+    cursor.executemany(query2, values2)
+
+    return {id: new_id for id, new_id in zip(rooms.keys(), ids)}
+
+def db_create_nodes(cursor, graph, location_map = None):
+    query = """
+    INSERT INTO BuildingModel.NavigationVertices(position,locationID)
+    OUTPUT inserted.ID
+    VALUES (geometry::STGeomFromText(?,0),?);
+    """
+
+    values = []
+    for node in graph.nodes():
+        if node.locationID == -1:
+            locationID = None
+        elif location_map:
+            locationID = location_map[node.locationID]
+        else:
+            locationID = node.locationID
+
+        position = "Point("+" ".join(map(str, node.pos))+")"
+        values.append((position, locationID,))
+
+    node_map  = {}
+    for id, val in enumerate(values): # workaround: fail to get fetchmany
+        cursor.execute(query, val)
+        node_map[id] = cursor.fetchone()[0]
+    return node_map # {id: row[0] for id, row in zip(graph.node_indexes(), cursor.fetchall())}
+
+def db_create_edges(cursor, graph, node_map):
+    query = """
+    INSERT INTO BuildingModel.NavigationEdges($from_id,$to_id,length)
+    VALUES ((SELECT $node_id FROM BuildingModel.NavigationVertices WHERE id=?), 
+            (SELECT $node_id FROM BuildingModel.NavigationVertices WHERE id=?), 
+            ?)
+    """
+
+    def map_n(x):
+        return node_map[x] if node_map else x
+    
+    values = []
+    for i, edge in zip(graph.edge_indices(), graph.edges()):
+        u, v = graph.get_edge_endpoints_by_index(i)
+        if node_map:
+            u = node_map[u]
+            v = node_map[v]
+        values.append((u,v,edge.length))
+    print(values)
+    cursor.executemany(query, values)
+
+def db_create_building_entry(cursor: pyodbc.Cursor, building: BuildingModel):
+    LONG_LAT = 4326 
+    
+    query = f"""
+    INSERT INTO BuildingModel.Buildings (label,contour)
+    OUTPUT INSERTED.id 
+    VALUES (?, geography::STPolyFromText(?,{LONG_LAT}));
+    """
+
+    # todo: correct long/lat extent of building
+    extent = [ 
+        [45.5, 56.5],
+        [56.5, 56.4],
+        [30.4, 26.4]
+    ]
+
+    cursor.execute(query, (building.name, db_contour_to_polygon(extent)))
+    new_id = cursor.fetchone()[0]
+    return new_id
+
+def db_create_building(conn: pyodbc.Connection, building: BuildingModel):
+    cursor = conn.cursor()
+    id = db_create_building_entry(cursor, building)
+    cursor.commit()
+    db_create_floor(cursor, id, building.floors)
+    room_map = db_create_rooms(cursor, id, building.rooms)
+    node_map = db_create_nodes(cursor, building.graph, room_map)
+    print(node_map)
+    db_create_edges(cursor, building.graph, node_map)
+
+    cursor.commit()

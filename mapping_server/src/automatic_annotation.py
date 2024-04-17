@@ -1,10 +1,11 @@
 from floor_plan_segmentation import segmentation as floor_segmentation, utils
-from building_model import BuildingModel, Room, Floor
+from building_model import BuildingModel, Room, Floor, NodeType
 import json
 import yaml
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
+from typing import Dict
 
 device = utils.select_device()
 segmentation_m = floor_segmentation.segmentation_model(device)
@@ -29,7 +30,7 @@ def plot_floor(ax, floor):
         p[2::3, :] = np.nan
         return list(p[:, 0]), list(p[:, 1])
 
-    for room in floor.rooms:
+    for id,room in floor.rooms.items():
         xc,yc = plot_contour(room.contour)
         xs += xc
         ys += yc
@@ -38,7 +39,6 @@ def plot_floor(ax, floor):
     ax.plot(xs, ys)
     ax.plot(xo, yo)
     ax.set_aspect('equal', adjustable='box')
-
 
 if __name__ == "__main__":
     img = cv2.imread("../../floor_plan_segmentation/data/cab_floor_0.png", cv2.IMREAD_GRAYSCALE)
@@ -65,17 +65,21 @@ if __name__ == "__main__":
 
     segmentation = segmentation_m.apply_transform(floor_to_absolute, segmentation)
 
-    rooms = {label: Room(type="regular", label=label, desc="", contour=contour) for label, contour in segmentation["rooms"]}
+    rooms = {id: Room(type="regular", label=label, desc="", contour=contour) for id, (label, contour) in enumerate(segmentation["rooms"])}
 
     floor = Floor(
+        label="E",
+        num=0,
         outline=segmentation["outline"],
-        rooms=[rooms[label] for label,_ in segmentation["rooms"]],
+        rooms=rooms,
         z=aabb_min[2],
         min=aabb_min[:2],
         max=aabb_max[:2]
     )
 
     building_model = BuildingModel(
+        id=0,
+        name="CAB",
         rooms=rooms,
         graph=graph,
         floors=[floor]
