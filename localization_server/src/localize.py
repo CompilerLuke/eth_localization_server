@@ -71,6 +71,7 @@ def load_model(conf: dict, device: torch.device):
     loaded_model_cache[key] = model
     return model
 
+# Preload
 def extract_features(conf, device, image, db_name="tmp"):
     data = hloc.extract_features.normalize_image(conf["preprocessing"], image)
 

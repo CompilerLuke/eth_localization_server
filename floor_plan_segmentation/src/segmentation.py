@@ -45,10 +45,13 @@ class Segmentation_Model:
         building_contour = sorted(contours_building, key=len)[-1]
         building_contour = cv2.approxPolyDP(building_contour, self.args.outline_eps * cv2.arcLength(building_contour, True), True)
 
-        return building_contour.reshape((building_contour.shape[0], 2))
+        scale = [img.shape[1],img.shape[0]]
+
+        return building_contour.reshape((building_contour.shape[0], 2)) / scale
 
     def extract_rooms(self, img, contours, hierarchy, out_patches = []):
         segmentation = []
+        scale = [img.shape[1],img.shape[0]]
 
         for i, contour in enumerate(contours):
             first_child = hierarchy[0, i, 2]
@@ -80,7 +83,7 @@ class Segmentation_Model:
 
             if room_num != -1:
                 contour_simp = cv2.approxPolyDP(contour, self.args.contour_eps * cv2.arcLength(contour, True), True)
-                segmentation.append((room_num, contour_simp.reshape((contour_simp.shape[0], 2))))
+                segmentation.append((room_num, contour_simp.reshape((contour_simp.shape[0], 2)) / scale))
 
         return segmentation
 
@@ -88,18 +91,30 @@ class Segmentation_Model:
         room_thick = 4
         building_thick = 10
 
+        scale = np.array([result.shape[1],result.shape[0]])
         for (label, contour) in segmentation["rooms"]:
+            contour = (contour*scale).astype(np.int32)
             (x,y,w,h) = cv2.boundingRect(contour)
             cv2.putText(result, label, [x+w//3,y+h//2], cv2.FONT_HERSHEY_PLAIN, 2.0, [0.0, 0.0, 0.0, 1.0], 1)
             cv2.drawContours(result, [contour], 0, [0.0, 0.0, 0.0], room_thick)
 
-        cv2.drawContours(result, [segmentation["outline"]], 0, [0.0, 0.0, 0.0, 0.0], building_thick)
+        cv2.drawContours(result, [(segmentation["outline"]*scale).astype(np.int32)], 0, [0.0, 0.0, 0.0, 0.0], building_thick)
 
     def segment(self, img):
         contours, hierarchy = self.extract_room_contours(img)
         rooms = self.extract_rooms(img, contours, hierarchy)
         outline = self.extract_building_outline(img)
         return {"outline": outline, "rooms": rooms}
+
+    def apply_transform(self, matrix, segmentation):
+        def apply_transform_to_contour(contour):
+            homo = np.zeros((contour.shape[0], 3)) # euclidean -> homogenous
+            homo[:,:2] = contour
+            homo[:,2] = 1
+            return np.einsum('ij,kj->ki', matrix, homo)[:,:2] # homogenous -> euclidean
+
+        return {"outline": apply_transform_to_contour(segmentation["outline"]),
+                "rooms": [(label,apply_transform_to_contour(contour)) for label,contour in segmentation["rooms"]]}
 
     def save(self, dst, img, segmentation):
         img_draw = 255*np.ones((img.shape[0],img.shape[1],3), dtype=img.dtype) #cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -112,7 +127,7 @@ class Segmentation_Model:
                 "outline": [x.tolist() for x in segmentation["outline"]]
             }
 
-            json.dump(data["outline"], f)
+            json.dump(data, f)
 
 
 from . import digit_model, label_model, utils
