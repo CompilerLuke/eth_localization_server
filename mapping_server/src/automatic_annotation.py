@@ -1,5 +1,5 @@
 from floor_plan_segmentation import segmentation as floor_segmentation, utils
-from building_model import BuildingModel, Room, Floor, NodeType
+from building_model import BuildingModel, Room, Floor, LocationType
 import json
 import yaml
 import cv2

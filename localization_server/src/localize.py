@@ -26,11 +26,6 @@ output_ref = outputs / "reference"
 output_ref_retrieval = output_ref / "retrieval"
 output_ref_features = output_ref / "features"
 
-output_query = outputs / "query"
-output_query_retrieval = output_query / "retrieval"
-output_query_features = output_query / "features"
-loc_pairs = output_query / "loc_pairs.txt"
-segmentation_path = outputs / "segmentation/plan_vote.png"
 
 debug_fig_plot_path = outputs / "logging/fig.png"
 
@@ -40,7 +35,6 @@ feature_path = outputs / "feats-superpoint-n4096-r1600.h5"
 # retrieval_ref_path = extract_features.main(conf=retrieval_conf, image_dir=ref_images, export_dir=output_ref_retrieval)
 retrieval_ref_path = output_ref_retrieval / "global-feats-netvlad.h5"
 
-floor_plan = cv2.imread(str(segmentation_path))
 
 device = base_model.select_device()
 
@@ -122,7 +116,7 @@ def estimate_pose(device, db_retrieval_desc, matches):
     return final_pose
 
 
-def plot_pose_on_map(final_pose):
+def plot_pose_on_map(floor_plan, final_pose):
     pos = final_pose[4:7]
 
     aabb_min = np.array([-80.19033051, -160.14266968, -14.49797497])
@@ -171,7 +165,12 @@ if __name__ == "__main__":
     img = cv2.imread("../data/tmp/query.jpg")
     final_pose = localize(img)
     localize(img)
+    
+    
+    segmentation_path = outputs / "segmentation/plan_vote.png"
+    floor_plan = cv2.imread(str(segmentation_path))
     plot_pose_on_map(final_pose)
+    
     plt.show()
 else:
     matplotlib.use('Agg')

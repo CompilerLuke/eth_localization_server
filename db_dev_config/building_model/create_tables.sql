@@ -7,6 +7,7 @@ CREATE TABLE BuildingModel.Floors (
 CREATE TABLE BuildingModel.Buildings (
     id INT IDENTITY(1,1) PRIMARY KEY,
     label CHAR(128),
+    username CHAR(128),
     contour GEOGRAPHY
 );
 
@@ -14,6 +15,7 @@ CREATE TABLE BuildingModel.Location (
     id INT IDENTITY(1,1) PRIMARY KEY,
     locationType INT,
     label CHAR(128),
+    description TEXT,
     contour GEOMETRY,
     building INT FOREIGN KEY REFERENCES BuildingModel.Buildings(id),
     parent INT FOREIGN KEY REFERENCES BuildingModel.Location(id)
@@ -23,14 +25,12 @@ CREATE TABLE BuildingModel.Rooms (
     id INT IDENTITY(1,1) PRIMARY KEY,
     locationID INT UNIQUE FOREIGN KEY REFERENCES BuildingModel.Location(id),
     roomType CHAR(128),
-    description TEXT
 );
 
 CREATE TABLE BuildingModel.PointLandmarks (
     id INT IDENTITY(1,1) PRIMARY KEY,
     locationID INT UNIQUE FOREIGN KEY REFERENCES BuildingModel.Location(id),
     pointType CHAR(128),
-    description TEXT
 );
 
 CREATE TABLE BuildingModel.Stairs (

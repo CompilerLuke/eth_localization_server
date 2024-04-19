@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 
 with open("../data/outputs/CAB_navviz/segmentation/building.json") as f:
     building = BuildingModel.from_json(json.load(f))
-
+    print("Loaded building", building)
 
 def inside_contour(contour, pos):
     x,y = pos
@@ -26,18 +26,17 @@ def nearest_node(building, pos):
     graph : rustworkx.PyGraph = building.graph
     room = None
 
-    for room in building.floors[0].rooms:
+    for room in building.floors[0].rooms.values():
         if inside_contour(room.contour, pos[:2]):
             room = room.label
     if room:
         print("Found room", room)
-        for node in graph.nodes():
+        for id, node in zip(graph.node_indices(), graph.nodes()):
             if node.label == room:
-                return node
+                return id, node
 
     dist = np.array([np.linalg.norm(node.pos - pos) for node in graph.nodes()])
-    node = graph[np.argmin(dist)]
-    return node
+    return np.argmin(dist)
 
 def navigate(building, src, dst):
     graph = building.graph

@@ -18,4 +18,7 @@ if __name__ == "__main__":
                           +f"PWD={pwd};"
                           +f"TrustServerCertificate=yes")
 
-    db_create_building(conn, building)
+    id = db_create_building(conn, building)
+    print("BUILDING ID", id)
+
+    db_query_locations(conn.cursor(), LocationFilter(building_id=id, matches="15"))

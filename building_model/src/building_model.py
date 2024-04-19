@@ -6,16 +6,16 @@ from typing import List, Dict, Tuple
 from enum import Enum
 import pyodbc
 import copy
+import re
 
-
-class NodeType(Enum):
+class LocationType(Enum):
     ROOM = 1
     CORRIDOR = 2
 
 
 @dataclass
 class NodeData:
-    type: NodeType
+    type: LocationType
     label: str
     pos: np.ndarray
     locationID: int
@@ -31,7 +31,7 @@ class NodeData:
     @staticmethod
     def from_json(data):
         return NodeData(
-                type= NodeType[data["type"]] if "type" in data else NodeType.ROOM,
+                type= LocationType[data["type"]] if "type" in data else LocationType.ROOM,
                 label=data["label"],
                 pos=np.array(data["pos"]),
                 locationID=int(data["locationID"])
@@ -50,6 +50,25 @@ class EdgeData:
     def from_json(data):
         return EdgeData(**data)
 
+# todo: add floor relation
+@dataclass 
+class Location:
+    id: str
+    label: str 
+    type: str
+    desc: str
+    contour: np.ndarray 
+    parent: int
+
+    def to_json(self):
+        return {
+            "id": self.id,
+            "label": self.label,
+            "desc": self.desc,
+            "type": self.type.value,
+            "contour": list(list(p) for p in self.contour),
+            "parent": self.parent
+        }
 
 @dataclass
 class Room:
@@ -103,7 +122,7 @@ class Floor:
             z= json["z"],
             min= json["min"],
             max= json["max"],
-            rooms= [rooms[room] for room in json["rooms"]],
+            rooms= {room: rooms[room] for room in json["rooms"]},
             outline= np.array(json["outline"]),
             label=json["label"],
             num=json["num"]
@@ -113,16 +132,18 @@ class Floor:
 class BuildingModel:
     id: int
     name: str
+    creator: str
     rooms: Dict[int, Room]
     floors: List[Floor]
     graph: rustworkx.PyGraph
 
-    def __init__(self, id: int, name: str, rooms: Dict[int,Room], floors: List[Floor], graph: rustworkx.PyGraph):
+    def __init__(self, id: int, name: str, rooms: Dict[int,Room], floors: List[Floor], graph: rustworkx.PyGraph, creator: str = ""):
         self.id = id
         self.name = name
         self.rooms = rooms
         self.floors = floors
         self.graph = graph
+        self.creator = creator
 
     @staticmethod
     def graph_to_json(graph: rustworkx.PyGraph):
@@ -204,25 +225,25 @@ def db_contour_to_polygon(contour):
 # todo: add floor
 def db_create_rooms(cursor: pyodbc.Cursor, building_id: int, rooms: Dict[str, Room]):
     query1 = """
-    INSERT INTO BuildingModel.Location (locationType, label, building, contour)
+    INSERT INTO BuildingModel.Location (locationType, label, description, building, contour)
     OUTPUT inserted.id
-    VALUES (?, ?, ?,  geometry::STPolyFromText(?,0));"""
+    VALUES (?, ?, ?, ?, geometry::STPolyFromText(?,0));"""
         
     query2 = """
-    INSERT INTO BuildingModel.Rooms (locationID, roomType, description)
-    VALUES (?, ?, ?)
+    INSERT INTO BuildingModel.Rooms (locationID, roomType)
+    VALUES (?, ?)
     """
 
     values1 = []
     for _, room in rooms.items():
-        values1.append((NodeType.ROOM.value, room.label, building_id, db_contour_to_polygon(room.contour))) 
+        values1.append((LocationType.ROOM.value, room.label, room.desc, building_id, db_contour_to_polygon(room.contour))) 
         
     cursor.executemany(query1, values1)
     ids = [row[0] for row in cursor.fetchall()]
     
     values2 = []
     for id,room in zip(ids, rooms.values()):
-        values2.append((id, room.type, room.desc))
+        values2.append((id, room.type))
     cursor.executemany(query2, values2)
 
     return {id: new_id for id, new_id in zip(rooms.keys(), ids)}
@@ -270,16 +291,15 @@ def db_create_edges(cursor, graph, node_map):
             u = node_map[u]
             v = node_map[v]
         values.append((u,v,edge.length))
-    print(values)
     cursor.executemany(query, values)
 
 def db_create_building_entry(cursor: pyodbc.Cursor, building: BuildingModel):
     LONG_LAT = 4326 
     
     query = f"""
-    INSERT INTO BuildingModel.Buildings (label,contour)
+    INSERT INTO BuildingModel.Buildings (label,contour,[username])
     OUTPUT INSERTED.id 
-    VALUES (?, geography::STPolyFromText(?,{LONG_LAT}));
+    VALUES (?, geography::STPolyFromText(?,{LONG_LAT}), ?);
     """
 
     # todo: correct long/lat extent of building
@@ -289,7 +309,7 @@ def db_create_building_entry(cursor: pyodbc.Cursor, building: BuildingModel):
         [30.4, 26.4]
     ]
 
-    cursor.execute(query, (building.name, db_contour_to_polygon(extent)))
+    cursor.execute(query, (building.name, db_contour_to_polygon(extent), building.creator))
     new_id = cursor.fetchone()[0]
     return new_id
 
@@ -300,7 +320,83 @@ def db_create_building(conn: pyodbc.Connection, building: BuildingModel):
     db_create_floor(cursor, id, building.floors)
     room_map = db_create_rooms(cursor, id, building.rooms)
     node_map = db_create_nodes(cursor, building.graph, room_map)
-    print(node_map)
     db_create_edges(cursor, building.graph, node_map)
 
     cursor.commit()
+    return id
+
+def parse_geometry(geo):
+    accum = ""
+    lex = []
+    for c in geo:
+        if c in ['(',')',',',' ']:
+            if accum:
+                lex.append(accum)
+            accum = ""
+            if not c in ' ':
+                lex.append(c)
+        else:
+            accum += c
+    if accum:
+        lex.append(accum)
+    # print(geo, lex)
+
+    if lex[0] == "POLYGON":
+        if lex[1:2] == ['(','(']:
+            return None
+        start = 3
+        end = lex.index(")")
+        i = start
+        points = []
+        while True:
+            x = float(lex[i])
+            y = float(lex[i+1])
+            points.append([x,y])
+            i += 2
+            if lex[i] != ",":
+                break
+            i += 1
+        if lex[i] != ')':
+            return None
+
+        return np.array(points)
+    else:
+        return None
+
+@dataclass
+class LocationFilter:
+    building_id: int
+    matches: str = ""
+    floor: int = None # todo: implement filter
+
+def db_query_locations(cursor: pyodbc.Cursor, filter: LocationFilter):
+    query= """
+    SELECT id,locationType,label,description,contour.ToString(),parent 
+    FROM BuildingModel.Location
+    WHERE building=?
+    """
+
+    args = [filter.building_id]
+    if filter.matches:
+        query += "AND label LIKE ?"
+        args.append(filter.matches+"%")
+
+    query += ";"
+
+    cursor.execute(query, args)
+
+    result = []
+    for id,locationType,label,desc,contour,parent in cursor.fetchall():
+        result.append(Location(
+            id=id,
+            type=LocationType(locationType),
+            label=label,
+            desc=desc,
+            contour=parse_geometry(contour),
+            parent=parent
+        ))
+
+    print("Locations")
+    print(result)
+    return result
+

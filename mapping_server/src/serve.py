@@ -1,5 +1,10 @@
 from flask import *
+from auth import config_oauth, google_token
+from cloud_bucket import config_map_storage
+from building_model import *
 import automatic_annotation
+import os
+import pyodbc
 
 app = Flask(__name__)
 
@@ -24,5 +29,42 @@ def automatic_annotation():
     pass
     #automatic_annotation.annotate()
 
+@app.route("/mapping/new_building", methods=['POST'])
+def new_building():
+    token = google_token()
+    if token is None:
+        return Response("Please sign in", status=401)
+    
+    name = request.form["name"]
+    username = token["email"]
+
+    cursor = app.conn.cursor()
+    id = db_create_building_entry(cursor, BuildingModel(id=0,name=name,rooms=[],floors=[],graph=None,creator=username))
+    cursor.commit()
+    print("New id", id)
+    return {
+        "id": id,
+    }
+
+
+#@app.route('/mapping/upload/file')
+
+def config_db(app):
+    host = os.environ["SQL_SERVER_HOST"]
+    port = os.environ["SQL_SERVER_PORT"]  
+    pwd = os.environ["SQL_SERVER_PASSWORD"]
+
+    app.conn = pyodbc.connect("Driver={ODBC Driver 18 for SQL Server};"
+                        +f"Server={host};"
+                        +f"Port={port};"
+                        +f"Database=master;"
+                        +f"UID=sa;"
+                        +f"PWD={pwd};"
+                        +f"TrustServerCertificate=yes")
+
 if __name__ == '__main__':
+    app.config.from_envvar('WEBSITE_CONF')
+    config_db(app)
+    config_oauth(app)
+    config_map_storage(app)
     app.run(debug=True, port=6000, host='0.0.0.0')
