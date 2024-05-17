@@ -113,4 +113,3 @@ dependencies:
       - wcwidth==0.2.13
       - werkzeug==3.0.2
       - zipp==3.18.1
-prefix: /Users/antonellacalvia/miniconda3/envs/eth_localization
