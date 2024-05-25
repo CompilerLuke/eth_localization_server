@@ -92,7 +92,7 @@ class Segmentation_Model:
         building_thick = 10
 
         scale = np.array([result.shape[1],result.shape[0]])
-        for (label, contour) in segmentation["rooms"]:
+        for (label, contour) in segmentation["locations"]:
             contour = (contour*scale).astype(np.int32)
             (x,y,w,h) = cv2.boundingRect(contour)
             cv2.putText(result, label, [x+w//3,y+h//2], cv2.FONT_HERSHEY_PLAIN, 2.0, [0.0, 0.0, 0.0, 1.0], 1)
@@ -104,7 +104,7 @@ class Segmentation_Model:
         contours, hierarchy = self.extract_room_contours(img)
         rooms = self.extract_rooms(img, contours, hierarchy)
         outline = self.extract_building_outline(img)
-        return {"outline": outline, "rooms": rooms}
+        return {"outline": outline, "locations": rooms}
 
     def apply_transform(self, matrix, segmentation):
         def apply_transform_to_contour(contour):
@@ -114,7 +114,7 @@ class Segmentation_Model:
             return np.einsum('ij,kj->ki', matrix, homo)[:,:2] # homogenous -> euclidean
 
         return {"outline": apply_transform_to_contour(segmentation["outline"]),
-                "rooms": [(label,apply_transform_to_contour(contour)) for label,contour in segmentation["rooms"]]}
+                "locations": [(label,apply_transform_to_contour(contour)) for label,contour in segmentation["locations"]]}
 
     def save(self, dst, img, segmentation):
         img_draw = 255*np.ones((img.shape[0],img.shape[1],3), dtype=img.dtype) #cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -123,7 +123,7 @@ class Segmentation_Model:
         cv2.imwrite(dst+".png", img_draw)
         with open(dst+".json","w") as f:
             data = {
-                "rooms": [(room,contour.tolist()) for room,contour in segmentation["rooms"]],
+                "locations": [(room,contour.tolist()) for room,contour in segmentation["locations"]],
                 "outline": [x.tolist() for x in segmentation["outline"]]
             }
 

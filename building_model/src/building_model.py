@@ -72,6 +72,7 @@ class Location:
 
 @dataclass
 class Room:
+    id: int
     label: str
     type: str
     desc: str
@@ -79,6 +80,7 @@ class Room:
 
     def to_json(self):
         return {
+            "id": self.id,
             "label": self.label,
             "type": self.type,
             "desc": self.desc,
@@ -88,6 +90,7 @@ class Room:
     @staticmethod
     def from_json(json):
         return Room(
+            id=json["id"],
             label=json["label"],
             type=json["type"],
             desc=json["desc"],
@@ -100,32 +103,35 @@ class Floor:
     z: float # floor
     min: np.ndarray # (3,)
     max: np.ndarray # (3,)
-    rooms: List[Room]
+    locations: List[Room]
     outline: np.ndarray # (n,2)
     label: str
     num: int
+    walkable_areas: List[np.ndarray] # (m,*,2)
 
     def to_json(self):
         return {
             "z": self.z,
             "min": list(self.min),
             "max": list(self.max),
-            "rooms": [id for id,_ in self.rooms.items()],
+            "locations": [room.to_json() for room in self.locations],
             "outline": [x.tolist() for x in self.outline],
             "label": self.label,
             "num": self.num,
+            "walkable_areas": [x.tolist() for x in self.walkable_areas]
         }
 
     @staticmethod
-    def from_json(rooms, json):
+    def from_json(json):
         return Floor(
             z= json["z"],
             min= json["min"],
             max= json["max"],
-            rooms= {room: rooms[room] for room in json["rooms"]},
+            locations= [Room.from_json(room) for room in json["locations"]],
             outline= np.array(json["outline"]),
             label=json["label"],
-            num=json["num"]
+            num=json["num"],
+            walkable_areas=[np.array(x) for x in json["walkable_areas"]]
         )
 
 
@@ -133,17 +139,21 @@ class BuildingModel:
     id: int
     name: str
     creator: str
-    rooms: Dict[int, Room]
+    locations: Dict[int, Room]
     floors: List[Floor]
     graph: rustworkx.PyGraph
 
-    def __init__(self, id: int, name: str, rooms: Dict[int,Room], floors: List[Floor], graph: rustworkx.PyGraph, creator: str = ""):
+    def __init__(self, id: int, name: str, floors: List[Floor], graph: rustworkx.PyGraph, creator: str = ""):
         self.id = id
         self.name = name
-        self.rooms = rooms
         self.floors = floors
         self.graph = graph
         self.creator = creator
+
+        self.locations = {}
+        for floor in floors:
+            for location in floor.locations:
+                self.locations[location.id] = location
 
     @staticmethod
     def graph_to_json(graph: rustworkx.PyGraph):
@@ -179,28 +189,26 @@ class BuildingModel:
         return graph
 
     def to_json(self):
-        rooms = {name: room.to_json() for name,room in self.rooms.items()}
+        locations = {name: room.to_json() for name,room in self.locations.items()}
         floors = [floor.to_json() for floor in self.floors]
         graph = BuildingModel.graph_to_json(self.graph)
 
         return {
             "id": self.id,
             "name": self.name,
-            "rooms": rooms,
+            "locations": locations,
             "floors": floors,
             "graph": graph
         }
 
     @staticmethod
     def from_json(json):
-        rooms = {int(id): Room.from_json(room) for id, room in json["rooms"].items()}
-        floors = [Floor.from_json(rooms, floor) for floor in json["floors"]]
+        floors = [Floor.from_json(floor) for floor in json["floors"]]
         graph = BuildingModel.graph_from_json(json["graph"])
 
         return BuildingModel(
             id=json["id"],
             name=json["name"],
-            rooms=rooms,
             floors=floors,
             graph=graph
         )

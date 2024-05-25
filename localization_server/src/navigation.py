@@ -26,7 +26,7 @@ def nearest_node(building, pos):
     graph : rustworkx.PyGraph = building.graph
     room = None
 
-    for room in building.floors[0].rooms.values():
+    for room in building.floors[0].locations.values():
         if inside_contour(room.contour, pos[:2]):
             room = room.label
     if room:

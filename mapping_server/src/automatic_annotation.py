@@ -6,10 +6,12 @@ import cv2
 from matplotlib import pyplot as plt
 import numpy as np
 from typing import Dict
+import torch
 
 device = utils.select_device()
 segmentation_m = floor_segmentation.segmentation_model(device)
 
+import localization_server
 
 def annotate(img):
     rooms = segmentation_m.segment(img)
@@ -30,65 +32,81 @@ def plot_floor(ax, floor):
         p[2::3, :] = np.nan
         return list(p[:, 0]), list(p[:, 1])
 
-    for id,room in floor.rooms.items():
+    for room in floor.locations:
         xc,yc = plot_contour(room.contour)
         xs += xc
         ys += yc
 
+    trajectories = localization_server.localize.parse_trajectories("../../localization_server/data/HG_navviz/trajectories.txt")
+    poses = []
+    for i in range(500):
+        idx = str(i).zfill(5) + "-cam0_center"
+        final_pose = trajectories[idx].t
+        poses.append(final_pose)
+    poses = torch.stack(poses)
+
+    #loc_sess = [14.6667, -12.9764,   0.9652] #[-13.8121, 12.7905, 0.9935]
+
     xo,yo = plot_contour(floor.outline)
     ax.plot(xs, ys)
-    ax.plot(xo, yo)
+    #ax.plot(xo, yo)
+    ax.scatter(poses[:,0], poses[:,1], color="red")
     ax.set_aspect('equal', adjustable='box')
 
 if __name__ == "__main__":
-    img = cv2.imread("../../floor_plan_segmentation/data/cab_floor_0.png", cv2.IMREAD_GRAYSCALE)
+    building_path = "../../localization_server/data/HG_navviz"
+    building_path_output = building_path + "/reference"
+
+    img = cv2.imread(building_path + "/raw_data/floor_plan/hg_floor_plan_g.png", cv2.IMREAD_GRAYSCALE)
     segmentation = annotate(img)
 
     img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     segmentation_m.draw(img_color, segmentation)
-    segmentation_m.save("../../floor_plan_segmentation/data/cab_floor_segmentation", img, segmentation)
+    segmentation_m.save(building_path_output+"/segmentation/hg_floor_plan_g_segmentation", img, segmentation)
 
     with open("../../localization_server/data/outputs/CAB_navviz/segmentation/graph.json") as f:
         graph = BuildingModel.graph_from_json(json.load(f))
 
-    aabb_min = np.array([-80.19033051, -160.14266968, -14.49797497])
-    aabb_max = np.array([173.27059428, 107.40621185, 46.93898773])
+    with open(building_path_output + "/transforms/transforms.json") as f:
+        transforms = json.load(f)
 
-    floor_to_relative = np.array([[0.17137878, 0.34187206, 0.21509406],
-                                  [-0.38568048, 0.1352338, 0.70865127],
-                                  [0., 0., 1.]])
-    relative_to_absolute = np.array([[253.46092479, 0., -80.19033051],
-                                     [   0.,        -267.54888153,  107.40621185],
-                                     [0., 0., 1.]])
+    with open(building_path_output + "/segmentation/walkable_areas.json") as f:
+        walkable_areas = json.load(f)["walkable_areas"]
+        walkable_areas = [np.array(x) for x in walkable_areas]
 
-    floor_to_absolute = relative_to_absolute @ floor_to_relative
+    aabb_min = transforms["min"]
+    aabb_max = transforms["max"]
 
-    segmentation = segmentation_m.apply_transform(floor_to_absolute, segmentation)
+    floor_to_relative = np.array(transforms["floor_to_relative"])
+    relative_to_absolute = np.array(transforms["relative_to_absolute"])
 
-    rooms = {id: Room(type="regular", label=label, desc="", contour=contour) for id, (label, contour) in enumerate(segmentation["rooms"])}
+    segmentation = segmentation_m.apply_transform(relative_to_absolute @ floor_to_relative, segmentation)
+
+    locations = [Room(id=id, type="regular", label=label, desc="", contour=contour) for id, (label, contour) in enumerate(segmentation["locations"])]
 
     floor = Floor(
         label="E",
         num=0,
         outline=segmentation["outline"],
-        rooms=rooms,
+        locations=locations,
         z=aabb_min[2],
         min=aabb_min[:2],
-        max=aabb_max[:2]
+        max=aabb_max[:2],
+        walkable_areas=walkable_areas
     )
 
     building_model = BuildingModel(
         id=0,
         name="CAB",
-        rooms=rooms,
         graph=graph,
         floors=[floor]
     )
 
-    with open("../../localization_server/data/outputs/CAB_navviz/segmentation/building.json", "w") as f:
+    building_json_output = building_path_output + "/segmentation/building.json"
+    with open(building_json_output, "w") as f:
         json.dump(building_model.to_json(), f)
 
-    with open("../../localization_server/data/outputs/CAB_navviz/segmentation/building.json", "r") as f:
+    with open(building_json_output, "r") as f:
         BuildingModel.from_json(json.load(f))
 
     fig, axes = plt.subplots(1, 2)
